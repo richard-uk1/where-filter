@@ -1,0 +1,91 @@
+use anyhow::Error;
+use crate::{convert_err, Condition, Query, NumberOrDate, Value, Number, Operation, lexer::Tok};
+use chrono::NaiveDate;
+use regex::Regex;
+use std::borrow::Cow;
+
+grammar<'input>(input: &'input str);
+
+extern {
+    type Location = usize;
+    type Error = Error;
+
+    enum Tok<'input> {
+        "is some" => Tok::IsSome,
+        "is none" => Tok::IsNone,
+        "(" => Tok::LCurly,
+        ")" => Tok::RCurly,
+        "and" => Tok::And,
+        "or" => Tok::Or,
+        "==" => Tok::Eq,
+        "!=" => Tok::Neq,
+        "<" => Tok::Lt,
+        "<=" => Tok::Leq,
+        ">" => Tok::Gt,
+        ">=" => Tok::Geq,
+        "like" => Tok::Like,
+        "matches" => Tok::Regex,
+        String => Tok::String(<Cow<'input, str>>),
+        Integer => Tok::Integer(<i32>),
+        Float => Tok::Float(<f64>),
+        Date => Tok::Date(<NaiveDate>),
+    }
+}
+
+pub Query: Query<'input> = <q:Ors> => Query::Or(q).normalize();
+
+Ors: Vec<Query<'input>> = {
+    <mut a:Ors> "or" <q:Ands> => {
+        a.push(Query::And(q).normalize());
+        a
+    },
+    <q:Ands> => {
+        vec![Query::And(q).normalize()]
+    }
+}
+
+Ands: Vec<Query<'input>> = {
+    <mut a:Ands> "and" <q:Condition> => {
+        a.push(q);
+        a
+    },
+    <q:Condition> => {
+        vec![q]
+    }
+}
+
+Condition: Query<'input> = {
+    <field:String> <operation:Operation> => Query::Condition(Condition { field, operation }),
+    "(" <Query> ")"
+}
+
+Operation: Operation<'input> = {
+    "is none" => Operation::IsNone,
+    "is some" => Operation::IsSome,
+    "==" <Value> => Operation::Equal(<>),
+    "!=" <Value> => Operation::NotEqual(<>),
+    ">" <NumberOrDate> => Operation::GreaterThan(<>),
+    ">=" <NumberOrDate> => Operation::GreaterThanOrEqual(<>),
+    "<" <NumberOrDate> => Operation::LessThan(<>),
+    "<=" <NumberOrDate> => Operation::LessThanOrEqual(<>),
+    "like" <String> => Operation::Like(<>),
+    "matches" <String> =>? Ok(Operation::Regex(
+        Regex::new(&<>).map_err(convert_err("couldn't parse regex"))?
+    )),
+}
+
+Value: Value<'input> = {
+    <Date> => Value::Date(<>),
+    <Number> => Value::Number(<>),
+    <String> => Value::String(<>),
+}
+
+NumberOrDate: NumberOrDate = {
+    <Date> => NumberOrDate::Date(<>),
+    <Number> => NumberOrDate::Number(<>),
+}
+
+Number: Number = {
+    <Integer> => Number::Integer(<>),
+    <Float> => Number::Float(<>)
+}
